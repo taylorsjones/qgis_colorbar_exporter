@@ -57,38 +57,54 @@ def generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex
         
     return labels
 
-def get_colorbar_dimensions(orientation, title_text, font_size, text_box_width, label_spacing, rotate_labels):
-    """Calculates sizes and layout based on the chosen orientation and title presence."""
+def get_colorbar_dimensions(orientation, top_text, bottom_text, font_size, text_box_width, label_spacing, rotation_angle):
+    """Calculates sizes and layout dynamically based on orientation and the presence of labels."""
     margin = 20
     bar_thickness = 40
     bar_length = 360
     tick_length = 5
     
-    title_space = int(font_size * 2.5) if title_text.strip() else 0
-    top_margin = margin + title_space
+    label_space = int(font_size * 2.0)
+    top_space = label_space if top_text.strip() else 0
+    bottom_space = label_space if bottom_text.strip() else 0
+    
+    # Force exactly one line of blank space between the title and the top of the colorbar
+    title_spacing = int(font_size * 1.5) if top_text.strip() else 0
     
     if orientation == "Vertical":
-        # Expand width if labels are rotated so they don't clip
-        adjusted_text_width = text_box_width * 1.2 if rotate_labels else text_box_width
+        # Greatly expand side limits if text is rotated to prevent clipping
+        adjusted_text_width = text_box_width * 1.5 if rotation_angle != 0 else text_box_width
         total_content_width = bar_thickness + tick_length + label_spacing + adjusted_text_width
-        img_width = max(450.0, total_content_width + 80.0)
         
+        img_width = max(450.0, total_content_width + 2 * margin)
         offset_x = (img_width - total_content_width) / 2.0
-        img_height = top_margin + bar_length + 40
+        
+        # Add extra top/bottom canvas padding to prevent rotated ticks from clipping 
+        top_overlap = (text_box_width * 0.8) if rotation_angle != 0 else 0
+        bottom_overlap = (text_box_width * 0.8) if rotation_angle != 0 else 0
+        
+        # top_margin marks the Y-coordinate where the gradient bar itself starts
+        top_margin = margin + top_overlap + top_space + title_spacing
+        img_height = top_margin + bar_length + bottom_overlap + bottom_space + margin
+        
         bar_rect = QRectF(offset_x, top_margin, bar_thickness, bar_length)
         
     else: # Horizontal
-        side_margin = max(40.0, text_box_width) if rotate_labels else max(40.0, text_box_width / 2.0)
-        img_width = bar_length + (2 * side_margin)
+        # Greatly expand bottom and side limits if text is rotated to prevent clipping
+        side_padding = max(margin, text_box_width * 1.2) if rotation_angle != 0 else max(margin, text_box_width / 2.0)
+        rotation_expansion = text_box_width * 1.2 if rotation_angle != 0 else 0
         
-        # Expand bottom height significantly if labels are rotated
-        rotation_expansion = text_box_width * 0.7 if rotate_labels else 0
-        img_height = top_margin + bar_thickness + tick_length + label_spacing + int(font_size * 5.5) + rotation_expansion + 20
+        core_height = bar_thickness + tick_length + label_spacing + int(font_size * 5.5) + rotation_expansion
         
-        offset_x = side_margin
+        img_width = side_padding + bar_length + side_padding
+        
+        top_margin = margin + top_space + title_spacing
+        img_height = top_margin + core_height + bottom_space + margin
+        
+        offset_x = side_padding
         bar_rect = QRectF(offset_x, top_margin, bar_length, bar_thickness)
         
-    return img_width, img_height, bar_rect, offset_x, top_margin, bar_thickness, bar_length, title_space
+    return img_width, img_height, bar_rect, offset_x, top_margin, bar_thickness, bar_length, top_space, bottom_space, title_spacing
 
 
 def draw_latex_text(painter, text, x, y, font_family, font_size, alignment, is_bold=False, use_siunitx=True, rotate_angle=0):
@@ -109,7 +125,7 @@ def draw_latex_text(painter, text, x, y, font_family, font_size, alignment, is_b
         }
         
     with mpl.rc_context(rc_params):
-        # We use a massive 10x10 inch canvas so that rotated math strings never clip the internal bounding box
+        # Massive 10x10 inch canvas guarantees rotated equations never clip their internal bounds
         fig_width_in = 10.0
         fig_height_in = 10.0
         fig = Figure(figsize=(fig_width_in, fig_height_in), dpi=72)
@@ -161,12 +177,16 @@ def draw_latex_text(painter, text, x, y, font_family, font_size, alignment, is_b
 
 
 def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_width, img_height, 
-                    bar_rect, offset_x, top_margin, bar_thickness, bar_length, title_space, text_box_width, label_spacing,
-                    font_family, font_size, title, bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotate_labels):
+                    bar_rect, offset_x, top_margin, bar_thickness, bar_length, 
+                    top_space, bottom_space, title_spacing, text_box_width, label_spacing,
+                    font_family, font_size, top_text, bottom_text, 
+                    bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle):
     
     painter = QPainter(paint_device)
     if isinstance(paint_device, QImage):
         painter.setRenderHint(QPainter.Antialiasing)
+
+    margin = 20
 
     if orientation == "Horizontal":
         h_align = Qt.AlignHCenter
@@ -178,17 +198,38 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
     if not is_transparent:
         painter.fillRect(QRectF(0, 0, img_width, img_height), bg_color)
 
-    if title.strip():
+    # --- Draw Top & Bottom Labels ---
+    
+    if top_text.strip():
+        center_x = img_width / 2.0
+        # Title is anchored directly to the colorbar position minus the one line of blank space
+        y_pos = top_margin - title_spacing - top_space
         if use_latex:
-            draw_latex_text(painter, title.strip(), img_width / 2.0, 20, 
+            draw_latex_text(painter, top_text.strip(), center_x, y_pos, 
                             font_family, font_size * 1.2, Qt.AlignHCenter | Qt.AlignTop, 
                             is_bold=True, use_siunitx=use_siunitx)
         else:
             title_font = QFont(font_family, int(font_size * 1.2), QFont.Bold)
             painter.setFont(title_font)
-            title_rect = QRectF(0, 20, img_width, title_space)
-            painter.drawText(title_rect, Qt.AlignHCenter | Qt.AlignTop, title.strip())
+            title_rect = QRectF(0, y_pos, img_width, top_space)
+            painter.drawText(title_rect, Qt.AlignHCenter | Qt.AlignTop, top_text.strip())
 
+    if bottom_text.strip():
+        center_x = img_width / 2.0
+        y_pos = img_height - margin - bottom_space
+        if use_latex:
+            draw_latex_text(painter, bottom_text.strip(), center_x, y_pos, 
+                            font_family, font_size * 1.2, Qt.AlignHCenter | Qt.AlignTop, 
+                            is_bold=True, use_siunitx=use_siunitx)
+        else:
+            title_font = QFont(font_family, int(font_size * 1.2), QFont.Bold)
+            painter.setFont(title_font)
+            title_rect = QRectF(0, y_pos, img_width, bottom_space)
+            painter.drawText(title_rect, Qt.AlignHCenter | Qt.AlignTop, bottom_text.strip())
+
+
+    # --- Draw Gradient Bar ---
+            
     min_val = items[0].value
     max_val = items[-1].value
     val_range = max_val - min_val if max_val != min_val else 1
@@ -199,8 +240,7 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
             
         painter.setPen(Qt.NoPen)
         for i in range(0, len(items), 2):
-            if i + 1 >= len(items):
-                break
+            if i + 1 >= len(items): break
             
             lower_item = items[i]
             upper_item = items[i+1]
@@ -242,13 +282,15 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
     painter.setBrush(Qt.NoBrush)
     painter.drawRect(bar_rect)
 
+    # --- Draw Ticks and Labels ---
+    
     tick_font = QFont(font_family, font_size)
     painter.setFont(tick_font)
     tick_length = 5
 
     # Angles: Qt rotates Clockwise. Matplotlib rotates Counter-Clockwise.
-    rotation_qt = 45 if rotate_labels else 0
-    rotation_mpl = -45 if rotate_labels else 0
+    rotation_qt = rotation_angle
+    rotation_mpl = -rotation_angle
 
     for i in range(num_ticks):
         rel_pos = i / (num_ticks - 1) if num_ticks > 1 else 0
@@ -330,6 +372,7 @@ class ColorbarSettingsDialog(QDialog):
         
         layout = QVBoxLayout()
         
+        # --- Row 1: Layout & Orientation ---
         h_layout = QHBoxLayout()
         h_layout.addWidget(QLabel("Orientation:"))
         self.combo_orientation = QComboBox()
@@ -359,6 +402,7 @@ class ColorbarSettingsDialog(QDialog):
         
         layout.addLayout(h_layout)
 
+        # --- Row 2: Typography ---
         h_text = QHBoxLayout()
         h_text.addWidget(QLabel("Font:"))
         self.combo_font = QFontComboBox()
@@ -381,7 +425,7 @@ class ColorbarSettingsDialog(QDialog):
         h_text.addWidget(self.spin_decimals)
         layout.addLayout(h_text)
         
-        # Split toggles into two rows for better spacing
+        # --- Row 3/4: Toggles ---
         h_toggles1 = QHBoxLayout()
         self.check_sci = QCheckBox("Scientific Notation")
         self.check_sci.stateChanged.connect(self.update_preview)
@@ -394,9 +438,12 @@ class ColorbarSettingsDialog(QDialog):
         layout.addLayout(h_toggles1)
         
         h_toggles2 = QHBoxLayout()
-        self.check_rotate = QCheckBox("Rotate Labels 45°")
-        self.check_rotate.stateChanged.connect(self.update_preview)
-        h_toggles2.addWidget(self.check_rotate)
+        h_toggles2.addWidget(QLabel("Rotate Tick Labels (°):"))
+        self.spin_rotate = QSpinBox()
+        self.spin_rotate.setRange(-360, 360)
+        self.spin_rotate.setValue(0)
+        self.spin_rotate.valueChanged.connect(self.update_preview)
+        h_toggles2.addWidget(self.spin_rotate)
 
         self.check_interpolate = QCheckBox("Interpolate Colors (Vector)")
         self.check_interpolate.stateChanged.connect(self.update_preview)
@@ -406,37 +453,46 @@ class ColorbarSettingsDialog(QDialog):
         h_toggles2.addStretch()
         layout.addLayout(h_toggles2)
         
+        # --- Row 5: Frame Labels ---
         h_labels = QHBoxLayout()
-        h_labels.addWidget(QLabel("Title:"))
-        self.edit_title = QLineEdit()
-        self.edit_title.setPlaceholderText("e.g. Elevation")
-        self.edit_title.textChanged.connect(self.update_preview)
-        h_labels.addWidget(self.edit_title)
+        h_labels.addWidget(QLabel("Top Label:"))
+        self.edit_top = QLineEdit()
+        self.edit_top.setPlaceholderText("e.g. Elevation")
+        self.edit_top.textChanged.connect(self.update_preview)
+        h_labels.addWidget(self.edit_top)
 
-        h_labels.addWidget(QLabel("Units:"))
+        h_labels.addWidget(QLabel("Bottom Label:"))
+        self.edit_bottom = QLineEdit()
+        self.edit_bottom.textChanged.connect(self.update_preview)
+        h_labels.addWidget(self.edit_bottom)
+        layout.addLayout(h_labels)
+        
+        # --- Row 6: Units & Background ---
+        h_extras = QHBoxLayout()
+        h_extras.addWidget(QLabel("Units:"))
         self.edit_units = QLineEdit()
         self.edit_units.setPlaceholderText("e.g. m/s or $m/s^2$")
         self.edit_units.textChanged.connect(self.update_preview)
-        h_labels.addWidget(self.edit_units)
-        layout.addLayout(h_labels)
+        h_extras.addWidget(self.edit_units)
         
-        h_bg = QHBoxLayout()
-        self.check_transparent = QCheckBox("Transparent Background")
+        self.check_transparent = QCheckBox("Transparent BG")
         self.check_transparent.stateChanged.connect(self.toggle_transparent)
-        h_bg.addWidget(self.check_transparent)
+        h_extras.addWidget(self.check_transparent)
         
-        self.btn_bg_color = QPushButton("Select Background Color...")
+        self.btn_bg_color = QPushButton("Select BG Color...")
         self.btn_bg_color.setStyleSheet(f"background-color: {self.bg_color.name()}; border: 1px solid #999;")
         self.btn_bg_color.clicked.connect(self.select_bg_color)
-        h_bg.addWidget(self.btn_bg_color)
-        layout.addLayout(h_bg)
+        h_extras.addWidget(self.btn_bg_color)
+        layout.addLayout(h_extras)
         
+        # --- Preview Area ---
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(540, 520) 
+        self.preview_label.setMinimumSize(580, 520) 
         self.preview_label.setStyleSheet("background-color: #e0e0e0; border: 1px inset #999;")
         layout.addWidget(self.preview_label)
         
+        # --- Actions ---
         h_buttons = QHBoxLayout()
         self.btn_copy = QPushButton("Copy to Clipboard")
         self.btn_copy.clicked.connect(self.copy_to_clipboard)
@@ -515,12 +571,15 @@ class ColorbarSettingsDialog(QDialog):
         font_family = self.combo_font.currentFont().family()
         font_size = self.spin_size.value()
         decimals = self.spin_decimals.value()
-        title = self.edit_title.text()
+        
+        top_text = self.edit_top.text()
+        bottom_text = self.edit_bottom.text()
+        
         units = self.edit_units.text()
         use_scientific = self.check_sci.isChecked()
         is_transparent = self.check_transparent.isChecked()
         use_latex = self.check_latex.isChecked()
-        rotate_labels = self.check_rotate.isChecked()
+        rotation_angle = self.spin_rotate.value()
         text_alignment = self.combo_align.currentText()
         label_spacing = self.spin_spacing.value()
         
@@ -547,17 +606,20 @@ class ColorbarSettingsDialog(QDialog):
         max_w = max(fm.boundingRect(l).width() for l in plain_labels) if plain_labels else 0
         text_box_w = max_w + (font_size * 2.5 if use_latex else 10)
         
-        img_w, img_h, bar_rect, offset_x, top_m, bar_t, bar_l, title_s = get_colorbar_dimensions(
-            orientation, title, font_size, text_box_w, label_spacing, rotate_labels
+        (img_w, img_h, bar_rect, offset_x, top_m, bar_t, bar_l, 
+         top_s, bot_s, title_s) = get_colorbar_dimensions(
+             orientation, top_text, bottom_text, 
+             font_size, text_box_w, label_spacing, rotation_angle
         )
         
         image = QImage(int(img_w), int(img_h), QImage.Format_ARGB32)
         image.fill(Qt.transparent)
         
         render_colorbar(image, items, labels, orientation, num_ticks, img_w, img_h, 
-                        bar_rect, offset_x, top_m, bar_t, bar_l, title_s, text_box_w, label_spacing,
-                        font_family, font_size, title, self.bg_color, is_transparent, 
-                        use_latex, use_siunitx, text_alignment, is_discrete, rotate_labels)
+                        bar_rect, offset_x, top_m, bar_t, bar_l, 
+                        top_s, bot_s, title_s, text_box_w, label_spacing,
+                        font_family, font_size, top_text, bottom_text,
+                        self.bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle)
         return image
         
     def update_preview(self):
@@ -646,13 +708,16 @@ class ColorbarExporter:
             font_family = dialog.combo_font.currentFont().family()
             font_size = dialog.spin_size.value()
             decimals = dialog.spin_decimals.value()
-            title = dialog.edit_title.text()
+            
+            top_text = dialog.edit_top.text()
+            bottom_text = dialog.edit_bottom.text()
+            
             units = dialog.edit_units.text()
             use_scientific = dialog.check_sci.isChecked()
             is_transparent = dialog.check_transparent.isChecked()
             bg_color = dialog.bg_color
             use_latex = dialog.check_latex.isChecked()
-            rotate_labels = dialog.check_rotate.isChecked()
+            rotation_angle = dialog.spin_rotate.value()
             text_alignment = dialog.combo_align.currentText()
             label_spacing = dialog.spin_spacing.value()
             file_path = dialog.file_path
@@ -669,8 +734,10 @@ class ColorbarExporter:
             max_w = max(fm.boundingRect(l).width() for l in plain_labels) if plain_labels else 0
             text_box_w = max_w + (font_size * 2.5 if use_latex else 10)
 
-            img_w, img_h, bar_rect, offset_x, top_m, bar_t, bar_l, title_s = get_colorbar_dimensions(
-                orientation, title, font_size, text_box_w, label_spacing, rotate_labels
+            (img_w, img_h, bar_rect, offset_x, top_m, bar_t, bar_l, 
+             top_s, bot_s, title_s) = get_colorbar_dimensions(
+                 orientation, top_text, bottom_text, 
+                 font_size, text_box_w, label_spacing, rotation_angle
             )
             
             is_svg = os.path.splitext(file_path)[1].lower() == '.svg'
@@ -687,9 +754,10 @@ class ColorbarExporter:
                 paint_device = image
             
             render_colorbar(paint_device, items, labels, orientation, num_ticks, img_w, img_h, 
-                            bar_rect, offset_x, top_m, bar_t, bar_l, title_s, text_box_w, label_spacing,
-                            font_family, font_size, title, bg_color, is_transparent, 
-                            use_latex, use_siunitx, text_alignment, is_discrete, rotate_labels)
+                            bar_rect, offset_x, top_m, bar_t, bar_l, 
+                            top_s, bot_s, title_s, text_box_w, label_spacing,
+                            font_family, font_size, top_text, bottom_text,
+                            bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle)
             
             if is_svg:
                 self.iface.messageBar().pushMessage("Success", f"SVG saved to {file_path}", level=0)
