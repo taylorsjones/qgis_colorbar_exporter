@@ -600,7 +600,9 @@ class ColorbarExporter:
         self.action = None
 
     def initGui(self):
-        self.action = QAction("Export Colorbar", self.iface.mainWindow())
+        icon_path = os.path.join(self.plugin_dir, 'icon.png')
+        icon = QIcon(icon_path)
+        self.action = QAction(icon, "Export Colorbar", self.iface.mainWindow())
         self.action.triggered.connect(self.run)
         self.iface.addPluginToRasterMenu("Colorbar Exporter", self.action)
         self.iface.addToolBarIcon(self.action)
