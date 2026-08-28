@@ -1,4 +1,4 @@
-# QGIS Colorbar Exporter
+# ![My Image](colorbar_plugin/icon.png) QGIS Colorbar Exporter 
 
 A powerful, highly customizable QGIS 3 plugin to extract color ramps from Raster and Vector layers and export them as publication-ready colorbars. 
 
