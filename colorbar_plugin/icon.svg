@@ -1,0 +1,12 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="viridis-ramp" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#440154" />
+      <stop offset="25%" stop-color="#3b528b" />
+      <stop offset="50%" stop-color="#21918c" />
+      <stop offset="75%" stop-color="#5ec962" />
+      <stop offset="100%" stop-color="#fde725" />
+    </linearGradient>
+  </defs>
+  <path d="M8 3 H16 V13 H20 L12 21 L4 13 H8 Z" fill="url(#viridis-ramp)" />
+</svg>
