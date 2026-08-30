@@ -13,7 +13,7 @@ email=taylor.jones@georgetown.edu
 about=Creates labeled colorbars from active layers and exports them as image files or copies them to the clipboard. Can be used to create publication quality legends with customizable tick marks and labels. Supports LaTeX notation for displaying units. Export options include .png, .tiff, and scalable vector .svg
 
 tracker=https://bug
-repository=https://repo
+repository=https://github.com/taylorsjones/qgis_colorbar/colorbar_plugin/metadata.txt
 # End of mandatory metadata
 
 # Recommended items:
