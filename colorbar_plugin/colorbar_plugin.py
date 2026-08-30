@@ -1,5 +1,6 @@
 import os
 import io
+import math
 from qgis.PyQt.QtCore import Qt, QRectF, QSize, QByteArray
 from qgis.PyQt.QtGui import QIcon, QPainter, QImage, QPixmap, QColor, QFont, QLinearGradient, QPen, QFontMetrics
 from qgis.PyQt.QtWidgets import (QAction, QFileDialog, QMessageBox, QDialog, 
@@ -26,17 +27,54 @@ class ColorItem:
 
 # --- HELPER FUNCTIONS FOR DRAWING ---
 
-def generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex, use_siunitx):
-    """Pre-calculates all label strings to accurately determine bounding boxes."""
-    labels = []
-    min_val = items[0].value
-    max_val = items[-1].value
-    val_range = max_val - min_val if max_val != min_val else 1
-    
-    for i in range(num_ticks):
-        rel_pos = i / (num_ticks - 1) if num_ticks > 1 else 0
-        val = min_val + (rel_pos * val_range)
+def calc_rel_pos(val, min_val, max_val, use_log10):
+    """Calculates relative spatial position (0.0 to 1.0) handling log10 warping safely."""
+    if use_log10 and max_val > 0:
+        # Prevent math domain errors for bounds <= 0 by clamping to a small fraction of the max value
+        eff_min = min_val if min_val > 0 else (max_val * 1e-4)
+        eff_val = val if val > 0 else eff_min
         
+        if max_val > eff_min:
+            try:
+                return (math.log10(eff_val) - math.log10(eff_min)) / (math.log10(max_val) - math.log10(eff_min))
+            except ValueError:
+                pass
+                
+    val_range = max_val - min_val if max_val != min_val else 1
+    return (val - min_val) / val_range
+
+def get_tick_positions(min_val, max_val, num_ticks, use_log10):
+    """Calculates tick values and their relative positions along the colorbar."""
+    ticks = []
+    
+    if use_log10 and max_val > 0:
+        # If min_val <= 0, start powers of ten at 10^0 (1) to prevent infinite decimal fractions
+        min_p = math.floor(math.log10(min_val)) if min_val > 0 else 0
+        max_p = math.ceil(math.log10(max_val))
+        
+        for p in range(int(min_p), int(max_p) + 1):
+            val = 10 ** p
+            if min_val <= val <= max_val:
+                rel_pos = calc_rel_pos(val, min_val, max_val, True)
+                ticks.append((val, rel_pos))
+                
+        if ticks:
+            return ticks
+            
+    # Fallback to linear intervals
+    val_range = max_val - min_val if max_val != min_val else 1
+    for i in range(num_ticks):
+        linear_ratio = i / (num_ticks - 1) if num_ticks > 1 else 0
+        val = min_val + (linear_ratio * val_range)
+        draw_pos = calc_rel_pos(val, min_val, max_val, use_log10)
+        ticks.append((val, draw_pos))
+        
+    return ticks
+
+def generate_labels(tick_values, decimals, units, use_scientific, use_latex, use_siunitx):
+    """Pre-calculates all label strings based on explicit tick values."""
+    labels = []
+    for val in tick_values:
         val_str = f"{val:.{decimals}e}" if use_scientific else f"{val:.{decimals}f}"
         
         if use_latex:
@@ -176,11 +214,11 @@ def draw_latex_text(painter, text, x, y, font_family, font_size, alignment, is_b
         renderer.render(painter, rect)
 
 
-def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_width, img_height, 
+def render_colorbar(paint_device, items, labels, orientation, tick_positions, img_width, img_height, 
                     bar_rect, offset_x, top_margin, bar_thickness, bar_length, 
                     top_space, bottom_space, title_spacing, text_box_width, label_spacing,
                     font_family, font_size, top_text, bottom_text, 
-                    bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle):
+                    bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle, use_log10):
     
     painter = QPainter(paint_device)
     if isinstance(paint_device, QImage):
@@ -232,7 +270,6 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
             
     min_val = items[0].value
     max_val = items[-1].value
-    val_range = max_val - min_val if max_val != min_val else 1
 
     if is_discrete:
         if isinstance(paint_device, QImage):
@@ -245,8 +282,11 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
             lower_item = items[i]
             upper_item = items[i+1]
             
-            rel_lower = max(0.0, min(1.0, (lower_item.value - min_val) / val_range))
-            rel_upper = max(0.0, min(1.0, (upper_item.value - min_val) / val_range))
+            rel_lower = calc_rel_pos(lower_item.value, min_val, max_val, use_log10)
+            rel_upper = calc_rel_pos(upper_item.value, min_val, max_val, use_log10)
+            
+            rel_lower = max(0.0, min(1.0, rel_lower))
+            rel_upper = max(0.0, min(1.0, rel_upper))
             
             if orientation == "Vertical":
                 y1 = top_margin + bar_length - (rel_upper * bar_length)
@@ -269,7 +309,7 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
             gradient = QLinearGradient(offset_x, 0, offset_x + bar_length, 0)
         
         for item in items:
-            rel_pos = (item.value - min_val) / val_range
+            rel_pos = calc_rel_pos(item.value, min_val, max_val, use_log10)
             rel_pos = max(0.0, min(1.0, rel_pos)) 
             gradient.setColorAt(rel_pos, item.color)
 
@@ -292,8 +332,7 @@ def render_colorbar(paint_device, items, labels, orientation, num_ticks, img_wid
     rotation_qt = rotation_angle
     rotation_mpl = -rotation_angle
 
-    for i in range(num_ticks):
-        rel_pos = i / (num_ticks - 1) if num_ticks > 1 else 0
+    for i, rel_pos in enumerate(tick_positions):
         label_text = labels[i]
         box_height = font_size * 3.0 
         
@@ -430,6 +469,10 @@ class ColorbarSettingsDialog(QDialog):
         self.check_sci = QCheckBox("Scientific Notation")
         self.check_sci.stateChanged.connect(self.update_preview)
         h_toggles1.addWidget(self.check_sci)
+
+        self.check_log10 = QCheckBox("Log10 Ticks")
+        self.check_log10.stateChanged.connect(self.update_preview)
+        h_toggles1.addWidget(self.check_log10)
         
         self.check_latex = QCheckBox("Enable LaTeX Math (siunitx)")
         self.check_latex.stateChanged.connect(self.update_preview)
@@ -577,6 +620,7 @@ class ColorbarSettingsDialog(QDialog):
         
         units = self.edit_units.text()
         use_scientific = self.check_sci.isChecked()
+        use_log10 = self.check_log10.isChecked()
         is_transparent = self.check_transparent.isChecked()
         use_latex = self.check_latex.isChecked()
         rotation_angle = self.spin_rotate.value()
@@ -599,8 +643,15 @@ class ColorbarSettingsDialog(QDialog):
         
         items = self.extract_items()
         
-        plain_labels = generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex=False, use_siunitx=False)
-        labels = generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex, use_siunitx)
+        min_val = items[0].value
+        max_val = items[-1].value
+        
+        ticks = get_tick_positions(min_val, max_val, num_ticks, use_log10)
+        tick_values = [t[0] for t in ticks]
+        tick_positions = [t[1] for t in ticks]
+        
+        plain_labels = generate_labels(tick_values, decimals, units, use_scientific, use_latex=False, use_siunitx=False)
+        labels = generate_labels(tick_values, decimals, units, use_scientific, use_latex, use_siunitx)
         
         fm = QFontMetrics(QFont(font_family, font_size))
         max_w = max(fm.boundingRect(l).width() for l in plain_labels) if plain_labels else 0
@@ -615,11 +666,11 @@ class ColorbarSettingsDialog(QDialog):
         image = QImage(int(img_w), int(img_h), QImage.Format_ARGB32)
         image.fill(Qt.transparent)
         
-        render_colorbar(image, items, labels, orientation, num_ticks, img_w, img_h, 
+        render_colorbar(image, items, labels, orientation, tick_positions, img_w, img_h, 
                         bar_rect, offset_x, top_m, bar_t, bar_l, 
                         top_s, bot_s, title_s, text_box_w, label_spacing,
                         font_family, font_size, top_text, bottom_text,
-                        self.bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle)
+                        self.bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle, use_log10)
         return image
         
     def update_preview(self):
@@ -714,6 +765,7 @@ class ColorbarExporter:
             
             units = dialog.edit_units.text()
             use_scientific = dialog.check_sci.isChecked()
+            use_log10 = dialog.check_log10.isChecked()
             is_transparent = dialog.check_transparent.isChecked()
             bg_color = dialog.bg_color
             use_latex = dialog.check_latex.isChecked()
@@ -727,8 +779,15 @@ class ColorbarExporter:
 
             items = dialog.extract_items()
             
-            plain_labels = generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex=False, use_siunitx=False)
-            labels = generate_labels(items, num_ticks, decimals, units, use_scientific, use_latex, use_siunitx)
+            min_val = items[0].value
+            max_val = items[-1].value
+            
+            ticks = get_tick_positions(min_val, max_val, num_ticks, use_log10)
+            tick_values = [t[0] for t in ticks]
+            tick_positions = [t[1] for t in ticks]
+            
+            plain_labels = generate_labels(tick_values, decimals, units, use_scientific, use_latex=False, use_siunitx=False)
+            labels = generate_labels(tick_values, decimals, units, use_scientific, use_latex, use_siunitx)
             
             fm = QFontMetrics(QFont(font_family, font_size))
             max_w = max(fm.boundingRect(l).width() for l in plain_labels) if plain_labels else 0
@@ -753,11 +812,11 @@ class ColorbarExporter:
                 image.fill(Qt.transparent)
                 paint_device = image
             
-            render_colorbar(paint_device, items, labels, orientation, num_ticks, img_w, img_h, 
+            render_colorbar(paint_device, items, labels, orientation, tick_positions, img_w, img_h, 
                             bar_rect, offset_x, top_m, bar_t, bar_l, 
                             top_s, bot_s, title_s, text_box_w, label_spacing,
                             font_family, font_size, top_text, bottom_text,
-                            bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle)
+                            bg_color, is_transparent, use_latex, use_siunitx, text_alignment, is_discrete, rotation_angle, use_log10)
             
             if is_svg:
                 self.iface.messageBar().pushMessage("Success", f"SVG saved to {file_path}", level=0)
